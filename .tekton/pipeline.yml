@@ -1,0 +1,87 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: ci-cd-pipeline
+spec:
+  workspaces:
+    - name: output
+  params:
+    - name: app-name
+      type: string
+      default: cicd-app
+    - name: build-image
+      type: string
+      default: image-registry.openshift-image-registry.svc:5000/sn-labs-pascalpribad/cicd-app:latest
+    - name: repo-url
+      type: string
+      default: https://github.com/pascalpap20/ci-cd-final-project.git
+    - name: branch
+      type: string
+      default: main
+  tasks:
+    - name: cleanup
+      taskRef:
+        name: cleanup
+      workspaces:
+        - name: source
+          workspace: output
+    - name: git-clone
+      taskRef:
+        kind: ClusterTask
+        name: git-clone
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.branch)
+      workspaces:
+        - name: output
+          workspace: output
+      runAfter:
+        - cleanup
+    - name: flake8
+      taskRef:
+        name: flake8
+      params:
+        - name: image
+          value: python:3.9-slim
+        - name: args
+          value: ["--count", "--max-complexity=10", "--max-line-length=127", "--statistics"]
+      workspaces:
+        - name: source
+          workspace: output
+      runAfter:
+        - git-clone
+    - name: nose
+      taskRef:
+        name: nose
+      params:
+        - name: args
+          value: "-v"
+      workspaces:
+        - name: source
+          workspace: output
+      runAfter:
+        - flake8
+    - name: buildah
+      taskRef:
+        kind: ClusterTask
+        name: buildah
+      params:
+        - name: IMAGE
+          value: $(params.build-image)
+      workspaces:
+        - name: source
+          workspace: output
+      runAfter:
+        - nose
+    - name: deploy
+      taskRef:
+        kind: ClusterTask
+        name: openshift-client
+      params:
+        - name: SCRIPT
+          value: oc create deployment $(params.app-name) --image=$(params.build-image) --dry-run=client -o yaml | oc apply -f -
+      runAfter:
+        - buildah
